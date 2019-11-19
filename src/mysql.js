@@ -1,4 +1,5 @@
 const mysql = require('mysql');
+var retry = require('retry');
 
 const { Promise } = global;
 let config = {};
@@ -64,12 +65,22 @@ function safeInvoke(callback, args) {
 
 function execute(sql, invokingResource, connection) {
   const queryPromise = new Promise((resolve, reject) => {
+    var operation = retry.operation({
+      retries: 5,
+      factor: 3,
+      minTimeout: 1 * 1000,
+      maxTimeout: 60 * 1000,
+      randomize: true,
+    });
     const start = process.hrtime();
     const db = connection || pool;
-    db.query(sql, (error, result) => {
-      writeDebug(process.hrtime(start), sql.sql, invokingResource);
-      if (error) reject(error);
-      resolve(result);
+    operation.attempt(() => {
+      db.query(sql, (error, result) => {
+        writeDebug(process.hrtime(start), sql.sql, invokingResource);
+        if (operation.retry(error)) return;
+        if (error) reject(operation.mainError());
+        resolve(result);
+      })
     });
   });
   queryPromise.catch((error) => {
